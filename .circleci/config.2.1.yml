@@ -1,0 +1,110 @@
+version: 2.1
+executors:
+  default:
+    working_directory: ~/repo
+    docker:
+      - image: circleci/php:7.3-stretch-node-browsers
+      - image: circleci/mysql:8.0.17
+        command: mysqld --default-authentication-plugin=mysql_native_password
+    environment:
+      - APP_DEBUG: true
+      - APP_ENV: testing
+      - APP_KEY: base64:YlIJx6uH3OUb3hxN+PAiJKlC+EGZ2KYi8VHxsfdJpLk=
+      - DB_CONNECTION: circleci
+commands:
+  install-dockerize:
+    steps:
+      - run:
+          name: Install dockerize
+          command: wget https://github.com/jwilder/dockerize/releases/download/$DOCKERIZE_VERSION/dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz && sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz && rm dockerize-linux-amd64-$DOCKERIZE_VERSION.tar.gz
+          environment:
+            DOCKERIZE_VERSION: v0.6.1
+  install-php-extensions:
+    steps:
+      - run:
+          name: Install PHP Extensions
+          command: sudo docker-php-ext-install pdo_mysql
+  restore-cache-composer:
+    steps:
+      - restore_cache:
+          keys:
+            - v1-dependencies-{{ checksum "laravel/composer.json" }}
+            - v1-dependencies-
+  composer-install:
+    steps:
+      - run:
+          name: composer install
+          working_directory: laravel
+          command: composer install -n --prefer-dist
+  save-cache-composer:
+    steps:
+      - save_cache:
+          paths:
+            - ./vendor
+          key: v1-dependencies-{{ checksum "laravel/composer.json" }}
+  wait-for-mysql:
+    steps:
+      - run:
+          name: Wait for MySQL
+          command: dockerize -wait tcp://localhost:3306 -timeout 1m
+  migration-seeding:
+    steps:
+      - run:
+          name: Migration & Seeding
+          working_directory: laravel
+          command: php artisan migrate --seed
+  test-static-code-analysis:
+    steps:
+      - run:
+          name: Coding rules check
+          working_directory: laravel
+          command: ./vendor/bin/phpcs --standard=phpcs.xml ./
+
+      - run:
+          name: Static code analysis
+          working_directory: laravel
+          command: php artisan code:analyse --paths='app,tests' --level=max
+  test-unittest:
+    steps:
+      - run:
+          name: Unittest
+          working_directory: laravel
+          command: ./vendor/bin/phpunit
+  test-e2etest:
+    steps:
+      - run:
+          name: Install Chrome Driver
+          working_directory: laravel
+          command: php artisan dusk:chrome-driver 76
+      - run:
+          name: Start Chrome Driver
+          working_directory: laravel
+          command: ./vendor/laravel/dusk/bin/chromedriver-linux
+          background: true
+      - run:
+          name: Start Laravel Server
+          working_directory: laravel
+          command: php artisan serve
+          background: true
+      - run:
+          name: Run Dusk
+          working_directory: laravel
+          command: php artisan dusk
+          environment:
+            APP_URL: http://localhost:8000
+jobs:
+  build:
+    executor:
+      name: default
+    steps:
+      - checkout
+      - install-dockerize
+      - install-php-extensions
+      - restore-cache-composer
+      - composer-install
+      - save-cache-composer
+      - wait-for-mysql
+      - migration-seeding
+      - test-static-code-analysis
+      - test-unittest
+      - test-e2etest
